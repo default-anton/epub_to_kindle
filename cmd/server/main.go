@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 	"gopkg.in/gomail.v2"
@@ -21,6 +22,19 @@ func main() {
 	log := logger.Sugar()
 	log.Info("Starting...")
 
+	botAdmins := make(map[int64]bool)
+	for _, adminID := range strings.Split(os.Getenv("BOT_ADMINS"), ",") {
+		ID, err := strconv.ParseInt(adminID, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+		botAdmins[ID] = true
+	}
+
+	if len(botAdmins) == 0 {
+		panic("BOT_ADMINS env var must be present")
+	}
+
 	bot, err := tgbotapi.NewBotAPI(os.Getenv("TELEGRAM_API_TOKEN"))
 	if err != nil {
 		panic(err)
@@ -33,18 +47,35 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	for update := range updates {
-		if update.Message == nil { // ignore any non-Message updates
+		if !botAdmins[update.Message.From.ID] {
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "You are not authorized!")
+			if _, err = bot.Send(msg); err != nil {
+				log.Errorf("Failed to send a message %s", err)
+			}
+			continue
+		}
+
+		if update.Message == nil {
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "I don't understand this message. Please send me an eBook")
+			if _, err = bot.Send(msg); err != nil {
+				log.Errorf("Failed to send a message %s", err)
+			}
 			continue
 		}
 
 		if update.Message.Document == nil {
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "I don't understand this message. Please send me an eBook")
+			if _, err = bot.Send(msg); err != nil {
+				log.Errorf("Failed to send a message %s", err)
+			}
 			continue
 		}
 
-		processUpdate(log, bot, &update)
+		sendEbookToKindle(log, bot, &update)
 	}
 }
-func processUpdate(log *zap.SugaredLogger, bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
+
+func sendEbookToKindle(log *zap.SugaredLogger, bot *tgbotapi.BotAPI, update *tgbotapi.Update) {
 	fileURL, err := bot.GetFileDirectURL(update.Message.Document.FileID)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Failed to download the file from telegram: %s", err))
